@@ -1,322 +1,195 @@
-import { Donor, DonorCategory, NGOEvent, DashboardMetrics, GreetingItem } from '../types'
+import { Donor, DonorCategory, NGOEvent, DashboardMetrics, GreetingItem, User } from '../types'
 
 const API_BASE = 'http://localhost:4008/engo/api/v1'
 
-let authToken: string | null = localStorage.getItem('engo_token')
+// ─── Token helpers ────────────────────────────────────────────────────────────
 
-/**
- * Ensures authenticated session with backend API.
- * Automatically logs in using test user credentials if no token exists.
- */
-export async function getAuthToken(): Promise<string | null> {
-  if (authToken) return authToken
-
-  try {
-    const res = await fetch(`${API_BASE}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'admin@engo.org', password: 'Password@123' })
-    })
-
-    if (res.ok) {
-      const json = await res.json()
-      const token = json.data?.data?.token || json.data?.token || json.token
-      if (token) {
-        authToken = token
-        localStorage.setItem('engo_token', token)
-        return token
-      }
-    }
-  } catch (e) {
-    console.warn('Auto login error:', e)
-  }
-  return null
+export function getStoredToken(): string | null {
+  return localStorage.getItem('engo_token')
 }
 
-async function authenticatedFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  const token = await getAuthToken()
+export function setStoredToken(token: string, user: User): void {
+  localStorage.setItem('engo_token', token)
+  localStorage.setItem('engo_user', JSON.stringify(user))
+}
+
+export function clearStoredToken(): void {
+  localStorage.removeItem('engo_token')
+  localStorage.removeItem('engo_user')
+}
+
+export function getStoredUser(): User | null {
+  try {
+    const raw = localStorage.getItem('engo_user')
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+// ─── Core fetch wrapper ───────────────────────────────────────────────────────
+// Backend response shape: { status, message, payload: { ... } }
+
+async function apiFetch(
+  path: string,
+  options: RequestInit = {},
+  onUnauthorized?: () => void
+): Promise<any> {
+  const token = getStoredToken()
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...((options.headers as Record<string, string>) || {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {})
   }
 
-  let res = await fetch(url, { ...options, headers, credentials: 'include' })
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers,
+    credentials: 'include'
+  })
 
   if (res.status === 401) {
-    localStorage.removeItem('engo_token')
-    authToken = null
-    const newToken = await getAuthToken()
-    if (newToken) {
-      const newHeaders: Record<string, string> = {
-        'Content-Type': 'application/json',
-        ...((options.headers as Record<string, string>) || {}),
-        Authorization: `Bearer ${newToken}`
-      }
-      res = await fetch(url, { ...options, headers: newHeaders, credentials: 'include' })
-    }
+    clearStoredToken()
+    onUnauthorized?.()
+    throw new Error('Session expired. Please login again.')
   }
 
-  return res
+  const json = await res.json()
+
+  if (!res.ok) {
+    throw new Error(json?.message || `Request failed: ${res.status}`)
+  }
+
+  // Backend wraps data in: { status, message, payload: { data: ... } }
+  // Return the payload directly so callers use json.data
+  return json.payload ?? json
 }
 
-// Fallback initial data in case of offline environment
-const initialCategories: DonorCategory[] = [
-  { category_id: 1, name: 'Doctor', description: 'Medical practitioners and specialists' },
-  { category_id: 2, name: 'Business', description: 'Business owners and entrepreneurs' },
-  { category_id: 3, name: 'Company', description: 'Corporate partners and sponsors' },
-  { category_id: 4, name: 'Professional', description: 'Engineers, CA, Lawyers, Consultants' },
-  { category_id: 5, name: 'Other', description: 'General donors and well-wishers' }
-]
+// ─── Auth ─────────────────────────────────────────────────────────────────────
 
-const initialDonors: Donor[] = [
-  {
-    donor_id: 1,
-    name: 'Dr. Rajesh Patel',
-    mobile: '+91 98250 12345',
-    email: 'dr.rajesh@gmail.com',
-    profession: 'Cardiologist',
-    category_id: 1,
-    city: 'Ahmedabad',
-    area: 'Navrangpura',
-    address: '102, Sunrise Towers, Near CG Road',
-    pincode: '380009',
-    dob: new Date().toISOString().split('T')[0],
-    anniversary_date: '2005-12-15',
-    notes: 'Regular donor for medical camps',
-    category: initialCategories[0]
-  },
-  {
-    donor_id: 2,
-    name: 'Anil Shah',
-    mobile: '+91 98980 54321',
-    email: 'anil.shah@techcorp.com',
-    profession: 'IT Businessman',
-    category_id: 2,
-    city: 'Surat',
-    area: 'Ring Road',
-    address: '405, Textile Market Plaza',
-    pincode: '395002',
-    dob: '1975-06-18',
-    anniversary_date: new Date().toISOString().split('T')[0],
-    notes: 'Sponsors annual education kit distribution',
-    category: initialCategories[1]
-  }
-]
+export const authService = {
+  login: async (email: string, password: string): Promise<{ token: string; user: User }> => {
+    const token_ = getStoredToken()
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (token_) headers['Authorization'] = `Bearer ${token_}`
 
-const initialEvents: NGOEvent[] = [
-  {
-    event_id: 1,
-    title: 'Mega Blood Donation Camp 2026',
-    description: 'Annual voluntary blood donation drive organized with Red Cross Society.',
-    event_date: '2026-10-15',
-    event_time: '09:00 AM - 05:00 PM',
-    venue: 'Community Hall, Navrangpura, Ahmedabad',
-    status: 'UPCOMING',
-    invitations: []
-  }
-]
-
-export const apiService = {
-  // Authentication
-  login: async (email: string, password: string) => {
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+      headers,
+      credentials: 'include',
+      body: JSON.stringify({ email: email.trim().toLowerCase(), password })
     })
-    if (res.ok) {
-      const json = await res.json()
-      const token = json.data?.data?.token || json.data?.token || json.token
-      if (token) {
-        authToken = token
-        localStorage.setItem('engo_token', token)
-      }
-      return json
+
+    const json = await res.json()
+
+    if (!res.ok) {
+      throw new Error(json?.message || 'Invalid credentials')
     }
-    throw new Error('Invalid credentials')
+
+    // Backend: { status, message, payload: { data: { token, user } } }
+    const payload = json.payload ?? json
+    const token = payload?.data?.token || payload?.token
+    const user: User = payload?.data?.user || payload?.user
+
+    if (!token || !user) throw new Error('Invalid response from server')
+    setStoredToken(token, user)
+    return { token, user }
   },
 
-  // Dashboard Metrics
-  getDashboardMetrics: async (): Promise<DashboardMetrics> => {
+  logout: async (onUnauthorized?: () => void): Promise<void> => {
     try {
-      const res = await authenticatedFetch(`${API_BASE}/dashboard/metrics`)
-      if (res.ok) {
-        const json = await res.json()
-        return json.data
-      }
-    } catch (e) {
-      console.warn('API error, using local fallback:', e)
+      await apiFetch('/auth/logout', { method: 'POST' }, onUnauthorized)
+    } finally {
+      clearStoredToken()
     }
+  },
 
-    return {
-      totalDonors: initialDonors.length,
-      totalCategories: initialCategories.length,
-      activeEvents: initialEvents.filter((e) => e.status === 'UPCOMING').length,
-      todaysBirthdays: 1,
-      todaysAnniversaries: 1,
-      recentDonors: initialDonors,
-      upcomingEvents: initialEvents
-    }
+  me: async (onUnauthorized?: () => void): Promise<User> => {
+    const payload = await apiFetch('/auth/me', {}, onUnauthorized)
+    return payload?.data ?? payload
+  }
+}
+
+// ─── API Service ──────────────────────────────────────────────────────────────
+
+export const apiService = {
+  // Dashboard
+  getDashboardMetrics: async (onUnauthorized?: () => void): Promise<DashboardMetrics> => {
+    const payload = await apiFetch('/dashboard/metrics', {}, onUnauthorized)
+    return payload?.data ?? payload
   },
 
   // Donors
-  getDonors: async (filters: any = {}): Promise<{ donors: Donor[]; total: number }> => {
-    try {
-      const params = new URLSearchParams(filters).toString()
-      const res = await authenticatedFetch(`${API_BASE}/donor?${params}`)
-      if (res.ok) {
-        const json = await res.json()
-        return { donors: json.data.donors, total: json.data.total }
-      }
-    } catch (e) {}
-
-    let filtered = [...initialDonors]
-    if (filters.search) {
-      const s = filters.search.toLowerCase()
-      filtered = filtered.filter(
-        (d) => d.name.toLowerCase().includes(s) || d.mobile.includes(s) || (d.email && d.email.toLowerCase().includes(s))
-      )
-    }
-    if (filters.category_id) {
-      filtered = filtered.filter((d) => d.category_id === Number(filters.category_id))
-    }
-    return { donors: filtered, total: filtered.length }
+  getDonors: async (
+    filters: Record<string, string> = {},
+    onUnauthorized?: () => void
+  ): Promise<{ donors: Donor[]; total: number }> => {
+    const params = new URLSearchParams(
+      Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== '' && v != null))
+    ).toString()
+    const payload = await apiFetch(`/donor${params ? `?${params}` : ''}`, {}, onUnauthorized)
+    const data = payload?.data ?? payload
+    return { donors: data?.donors ?? data ?? [], total: data?.total ?? 0 }
   },
 
-  createDonor: async (donorData: Partial<Donor>): Promise<Donor> => {
-    try {
-      const res = await authenticatedFetch(`${API_BASE}/donor`, {
-        method: 'POST',
-        body: JSON.stringify(donorData)
-      })
-      if (res.ok) {
-        const json = await res.json()
-        return json.data
-      }
-    } catch (e) {}
-
-    const newDonor: Donor = {
-      donor_id: Date.now(),
-      name: donorData.name || '',
-      mobile: donorData.mobile || '',
-      email: donorData.email,
-      profession: donorData.profession,
-      category_id: donorData.category_id ? Number(donorData.category_id) : undefined,
-      city: donorData.city,
-      area: donorData.area,
-      address: donorData.address,
-      pincode: donorData.pincode,
-      dob: donorData.dob,
-      anniversary_date: donorData.anniversary_date,
-      notes: donorData.notes,
-      category: initialCategories.find((c) => c.category_id === Number(donorData.category_id))
-    }
-    initialDonors.unshift(newDonor)
-    return newDonor
+  createDonor: async (donorData: Partial<Donor>, onUnauthorized?: () => void): Promise<Donor> => {
+    const payload = await apiFetch('/donor', { method: 'POST', body: JSON.stringify(donorData) }, onUnauthorized)
+    return payload?.data ?? payload
   },
 
-  deleteDonor: async (id: number): Promise<boolean> => {
-    try {
-      const res = await authenticatedFetch(`${API_BASE}/donor/${id}`, { method: 'DELETE' })
-      if (res.ok) return true
-    } catch (e) {}
-    const idx = initialDonors.findIndex((d) => d.donor_id === id)
-    if (idx !== -1) initialDonors.splice(idx, 1)
-    return true
+  updateDonor: async (id: number, donorData: Partial<Donor>, onUnauthorized?: () => void): Promise<Donor> => {
+    const payload = await apiFetch(`/donor/${id}`, { method: 'PUT', body: JSON.stringify(donorData) }, onUnauthorized)
+    return payload?.data ?? payload
+  },
+
+  deleteDonor: async (id: number, onUnauthorized?: () => void): Promise<void> => {
+    await apiFetch(`/donor/${id}`, { method: 'DELETE' }, onUnauthorized)
   },
 
   // Donor Categories
-  getCategories: async (): Promise<DonorCategory[]> => {
-    try {
-      const res = await authenticatedFetch(`${API_BASE}/donor-category`)
-      if (res.ok) {
-        const json = await res.json()
-        return json.data
-      }
-    } catch (e) {}
-    return initialCategories
+  getCategories: async (onUnauthorized?: () => void): Promise<DonorCategory[]> => {
+    const payload = await apiFetch('/donor-category', {}, onUnauthorized)
+    const data = payload?.data ?? payload
+    return data?.categories ?? data ?? []
   },
 
-  createCategory: async (categoryData: Partial<DonorCategory>): Promise<DonorCategory> => {
-    try {
-      const res = await authenticatedFetch(`${API_BASE}/donor-category`, {
-        method: 'POST',
-        body: JSON.stringify(categoryData)
-      })
-      if (res.ok) {
-        const json = await res.json()
-        return json.data
-      }
-    } catch (e) {}
-
-    const newCat: DonorCategory = {
-      category_id: Date.now(),
-      name: categoryData.name || '',
-      description: categoryData.description
-    }
-    initialCategories.push(newCat)
-    return newCat
+  createCategory: async (categoryData: Partial<DonorCategory>, onUnauthorized?: () => void): Promise<DonorCategory> => {
+    const payload = await apiFetch('/donor-category', { method: 'POST', body: JSON.stringify(categoryData) }, onUnauthorized)
+    return payload?.data ?? payload
   },
 
   // Greetings
-  getTodaysGreetings: async (): Promise<{ birthdays: GreetingItem[]; anniversaries: GreetingItem[] }> => {
-    try {
-      const res = await authenticatedFetch(`${API_BASE}/greeting/today`)
-      if (res.ok) {
-        const json = await res.json()
-        return json.data
-      }
-    } catch (e) {}
-
-    const todayBirthdays = initialDonors.map((donor) => {
-      const msg = `Dear ${donor.name}, Wishing you a very Happy Birthday! May your day be filled with joy and blessings. Thank you for your continued support to our NGO family.`
-      return {
-        donor,
-        type: 'BIRTHDAY' as const,
-        message: msg,
-        whatsapp_link: `https://api.whatsapp.com/send?phone=${donor.mobile.replace(/\D/g, '')}&text=${encodeURIComponent(msg)}`
-      }
-    })
-
-    return { birthdays: todayBirthdays, anniversaries: [] }
+  getTodaysGreetings: async (
+    onUnauthorized?: () => void
+  ): Promise<{ birthdays: GreetingItem[]; anniversaries: GreetingItem[] }> => {
+    const payload = await apiFetch('/greeting/today', {}, onUnauthorized)
+    const data = payload?.data ?? payload
+    return { birthdays: data?.birthdays ?? [], anniversaries: data?.anniversaries ?? [] }
   },
 
   // Events
-  getEvents: async (): Promise<NGOEvent[]> => {
-    try {
-      const res = await authenticatedFetch(`${API_BASE}/event`)
-      if (res.ok) {
-        const json = await res.json()
-        return json.data.events
-      }
-    } catch (e) {}
-    return initialEvents
+  getEvents: async (onUnauthorized?: () => void): Promise<NGOEvent[]> => {
+    const payload = await apiFetch('/event', {}, onUnauthorized)
+    const data = payload?.data ?? payload
+    return data?.events ?? data ?? []
   },
 
-  createEvent: async (eventData: Partial<NGOEvent>): Promise<NGOEvent> => {
-    try {
-      const res = await authenticatedFetch(`${API_BASE}/event`, {
-        method: 'POST',
-        body: JSON.stringify(eventData)
-      })
-      if (res.ok) {
-        const json = await res.json()
-        return json.data
-      }
-    } catch (e) {}
+  createEvent: async (eventData: Partial<NGOEvent>, onUnauthorized?: () => void): Promise<NGOEvent> => {
+    const payload = await apiFetch('/event', { method: 'POST', body: JSON.stringify(eventData) }, onUnauthorized)
+    return payload?.data ?? payload
+  },
 
-    const newEv: NGOEvent = {
-      event_id: Date.now(),
-      title: eventData.title || '',
-      description: eventData.description,
-      event_date: eventData.event_date || new Date().toISOString().split('T')[0],
-      event_time: eventData.event_time,
-      venue: eventData.venue || '',
-      status: 'UPCOMING',
-      invitations: []
-    }
-    initialEvents.unshift(newEv)
-    return newEv
+  sendEventInvitations: async (
+    eventId: number,
+    donorIds: number[],
+    onUnauthorized?: () => void
+  ): Promise<{ invitation_links: any[]; sent_count: number }> => {
+    const payload = await apiFetch(
+      `/event/${eventId}/invite`,
+      { method: 'POST', body: JSON.stringify({ donor_ids: donorIds, channel: 'WHATSAPP' }) },
+      onUnauthorized
+    )
+    return payload?.data ?? payload
   }
 }

@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Donor, DonorCategory } from '../types'
-import { Search, Filter, Plus, Trash2, Edit2, CheckSquare, Square, Printer, MessageSquare, Calendar, Gift } from 'lucide-react'
+import { Search, Plus, Trash2, Edit2, CheckSquare, Square, Printer, Calendar, Gift } from 'lucide-react'
+import { EditDonorModal } from './EditDonorModal'
 
 interface DonorListViewProps {
   donors: Donor[]
@@ -10,6 +11,7 @@ interface DonorListViewProps {
   onSearch: (filters: any) => void
   onOpenAddDonor: () => void
   onDeleteDonor: (id: number) => void
+  onEditDonor: (id: number, data: Partial<Donor>) => Promise<void>
   onNavigateToStickers: () => void
   onNavigateToEvents: () => void
   onNavigateToGreetings: () => void
@@ -23,10 +25,12 @@ export const DonorListView: React.FC<DonorListViewProps> = ({
   onSearch,
   onOpenAddDonor,
   onDeleteDonor,
+  onEditDonor,
   onNavigateToStickers,
   onNavigateToEvents,
   onNavigateToGreetings
 }) => {
+  const [editingDonor, setEditingDonor] = useState<Donor | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('')
   const [selectedCity, setSelectedCity] = useState('')
@@ -208,13 +212,23 @@ export const DonorListView: React.FC<DonorListViewProps> = ({
                       <td>{donor.dob || '-'}</td>
                       <td>{donor.anniversary_date || '-'}</td>
                       <td style={{ textAlign: 'right' }}>
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          style={{ color: '#ef4444' }}
-                          onClick={() => onDeleteDonor(donor.donor_id)}
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                        <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            title="Edit donor"
+                            onClick={() => setEditingDonor(donor)}
+                          >
+                            <Edit2 size={14} />
+                          </button>
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            style={{ color: '#ef4444' }}
+                            title="Delete donor"
+                            onClick={() => onDeleteDonor(donor.donor_id)}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   )
@@ -253,6 +267,19 @@ export const DonorListView: React.FC<DonorListViewProps> = ({
             </button>
           </div>
         </div>
+      )}
+
+      {/* Edit Donor Modal */}
+      {editingDonor && (
+        <EditDonorModal
+          donor={editingDonor}
+          categories={categories}
+          onClose={() => setEditingDonor(null)}
+          onSave={async (id, data) => {
+            await onEditDonor(id, data)
+            setEditingDonor(null)
+          }}
+        />
       )}
     </div>
   )

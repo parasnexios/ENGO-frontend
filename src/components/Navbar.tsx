@@ -1,5 +1,5 @@
 import React from 'react'
-import { ActiveTab } from '../types'
+import { ActiveTab, User } from '../types'
 import { LayoutDashboard, Users, Tags, Gift, Calendar, Printer, HeartHandshake, LogOut, UserCheck } from 'lucide-react'
 
 interface NavbarProps {
@@ -8,9 +8,15 @@ interface NavbarProps {
   onOpenAddDonor: () => void
   onOpenAddEvent: () => void
   onLogout: () => void
+  currentUser?: User | null
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, onOpenAddDonor, onOpenAddEvent, onLogout }) => {
+export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, onOpenAddDonor, onOpenAddEvent, onLogout, currentUser }) => {
+  const handleLogoutClick = () => {
+    if (window.confirm('Are you sure you want to logout?')) {
+      onLogout()
+    }
+  }
   const navItems: { id: ActiveTab; label: string; icon: React.ReactNode }[] = [
     { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
     { id: 'donors', label: 'Donors Directory', icon: <Users size={18} /> },
@@ -74,14 +80,20 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, onOpenA
           {/* User Badge */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', color: 'var(--text-muted)', padding: '4px 8px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)' }}>
             <UserCheck size={14} color="#34d399" />
-            <span style={{ fontWeight: 600, color: '#f8fafc' }}>Admin</span>
+            <span style={{ fontWeight: 600, color: '#f8fafc' }}>{currentUser?.name || 'Admin'}</span>
+            {currentUser?.role && (
+              <span style={{ fontSize: '10px', background: 'rgba(99,102,241,0.2)', color: '#818cf8', borderRadius: '4px', padding: '1px 6px', textTransform: 'uppercase' }}>
+                {currentUser.role}
+              </span>
+            )}
           </div>
 
           {/* Logout Button */}
           <button
+            id="navbar-logout-btn"
             className="btn btn-secondary btn-sm"
             style={{ color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.3)' }}
-            onClick={onLogout}
+            onClick={handleLogoutClick}
             title="Logout Session"
           >
             <LogOut size={16} />
